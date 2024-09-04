@@ -4,16 +4,11 @@ Industrial Internet of Things (IIoT) generates a vast amount of data through sen
 
 ## Requirement
 
-We have used Python to implement the experiment of our proposed scheme, and the Python modules below are required to be installed
+To run the experiment, install the required Python modules/libraries
 
-- ecpy
-- secrets
-- threading
-- azure.storage.blob
-- aes256
-- base64
-- psutil
-- hashlib
+```
+pip install -r requirement.txt
+```
 
 ## Experiment
 
@@ -25,6 +20,6 @@ If you want to try our experiment, you have to run these ```.py``` files
     - [Our scheme](./cloud.py)
     - [Traditional scheme](./cloud_ecdsa.py)
 
-#### Remark
+## Related courses
 
 This project is contributed to CSS451 Cloud Computing and CSS454 Network Security courses at Sirindhorn International Institute of Technology (SIIT), Curriculum year 2021
