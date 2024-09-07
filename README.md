@@ -12,13 +12,16 @@ pip install -r requirement.txt
 
 ## Experiment
 
-If you want to try our experiment, you have to run these ```.py``` files
+To try our experiment, run [main.py](./main.py)
 
-- [To measure execution time of single IoT device for each scheme](./single_iot.py)
+- set number of `fog_nodes` and `devices_per_node` in the `main` function to measure execution time in each phase including:
 
-- To measure execution time between IIoT devices and CSP for data authentication and transmission according to the number of fog nodes
-    - [Our scheme](./cloud.py)
-    - [Traditional scheme](./cloud_ecdsa.py)
+1. System Initialization
+    1. IIoT Devices Authentication and Key Exchange (Leader - IIoT Devices) using PUF-based authentication
+    2. Group Authentication and Secure Channel Establishment (Leader - Fog node) using NIZKP
+2. Data Authentication and Data Integrity Verification
+    1. Data authentication
+    2. Cloud uploading
 
 ## Related courses
 
