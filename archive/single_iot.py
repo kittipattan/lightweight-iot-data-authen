@@ -8,7 +8,7 @@ import utils
 import random
 import string
 from aes256 import AESCipher
-from measurement import measure_computation_cost
+from archive.measurement import measure_computation_cost
 from nizkp import generate_proof, verify_proof
 from base64 import b64encode, b64decode
 from hashlib     import sha256

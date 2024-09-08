@@ -1,30 +1,28 @@
-# A Secure and Lightweight IIoT Data Authentication using Fog-Assisted Cloud
+# A Secure and Lightweight IIoT Data Authentication using PUF-based and ZKP in IoT Fog-Assisted Cloud Environment
 
-Industrial Internet of Things (IIoT) generates a vast amount of data through sensors and devices within the industrial environments every day. In many cases, this data is sensitive and needs protection, but it is challenging due to the distribution and limited resources of IIoT devices. Existing works typically focus on designing encryption algorithms to protect the confidentiality of the data. However, many industrial sectors also require the data to be completely authentic due to the business requirements. Ensuring the authenticity, integrity and reliability of the IIoT data is therefore necessary. For this reason, we proposed a secure and lightweight authentication scheme for IIoT data using fog-assisted cloud. This proposed scheme adopts the ideas of group authentication, Non Interactive Zero-Knowledge Proof (NIZKP), and Physical Unclonable Function (PUF) in the authentication process between fog nodes, leader IIoT devices, and member IIoT devices. In the end, we demonstrated the implementation and conducted the experiments to evaluate the performance and effectiveness of our proposed scheme while maintaining lightweight resource usage.
+The Industrial Internet of Things (IIoT) generates a vast amount of data through sensors and devices within industrial environments. This data is often sensitive and requires protection, which is challenging due to the distributed nature and limited resources of IIoT devices. While existing approaches primarily focus on encryption algorithms to secure data confidentiality, many industrial sectors also demand data authenticity to meet rigorous security requirements. Thus, ensuring the authenticity, integrity, and reliability of IIoT data is crucial. However, most current authentication mechanisms are unsuitable for large-scale IoT data sharing due to their lack of scalability and failure to address the revocation of devices. To address these challenges, we propose a secure and lightweight authentication scheme for IIoT data with secure devices revocation support. We utilize Non-Interactive Zero-Knowledge Proof (NIZKP) and Physical Unclonable Functions (PUF)-based authentication for authenticating multiple devices within a group and the fog nodes. This approach minimizes communication costs while ensuring robust authentication in large-scale IIoT systems. In addition, we introduce algorithms for device revocation and discovery of rogue IoT devices. Finally, we implemented and evaluated our scheme, demonstrating its performance and effectiveness while maintaining lightweight resource usage.
 
 ## Requirement
 
-We have used Python to implement the experiment of our proposed scheme, and the Python modules below are required to be installed
+To run the experiment, install the required Python modules/libraries
 
-- ecpy
-- secrets
-- threading
-- azure.storage.blob
-- aes256
-- base64
-- psutil
-- hashlib
+```
+pip install -r requirement.txt
+```
 
 ## Experiment
 
-If you want to try our experiment, you have to run these ```.py``` files
+To try our experiment, run [main.py](./main.py)
 
-- [To measure execution time of single IoT device for each scheme](./single_iot.py)
+- set number of `fog_nodes` and `devices_per_node` in the `main` function to measure execution time in each phase including:
 
-- To measure execution time between IIoT devices and CSP for data authentication and transmission according to the number of fog nodes
-    - [Our scheme](./cloud.py)
-    - [Traditional scheme](./cloud_ecdsa.py)
+1. System Initialization
+    1. IIoT Devices Authentication and Key Exchange (Leader - IIoT Devices) using PUF-based authentication
+    2. Group Authentication and Secure Channel Establishment (Leader - Fog node) using NIZKP
+2. Data Authentication and Data Integrity Verification
+    1. Data authentication
+    2. Cloud uploading
 
-#### Remark
+## Related courses
 
 This project is contributed to CSS451 Cloud Computing and CSS454 Network Security courses at Sirindhorn International Institute of Technology (SIIT), Curriculum year 2021
