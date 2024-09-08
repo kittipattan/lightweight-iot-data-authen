@@ -2,7 +2,7 @@ import time
 import psutil
 import os
 
-def measure_computation_cost(func, name, round):
+def measure_computation_cost(func, name, round, *args, **kwargs):
 
   print(f"""\n--------------------------------------------------------------------
 START MEASURING '{name}'
@@ -23,7 +23,7 @@ START MEASURING '{name}'
     memory_before = p.memory_info().rss
 
     ### call function
-    func()
+    func(*args, **kwargs)
 
     end_time = time.time()
     execution_time += (end_time - start_time)
@@ -32,8 +32,9 @@ START MEASURING '{name}'
     memory_after = p.memory_info().rss
     memory_used += memory_after - memory_before
 
+  exec_time = (execution_time/num_round)*1000
   print("===== Experiment Result =====\n")
-  print(f"Execution Time: {(execution_time/num_round)*1000:.5f} ms")
+  print(f"Execution Time: {exec_time:.5f} ms")
   print("\n============ END ============\n")
 
-  return
+  return exec_time
