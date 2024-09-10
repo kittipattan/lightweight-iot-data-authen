@@ -23,6 +23,12 @@ To try our experiment, run [main.py](./main.py)
     1. Data authentication
     2. Cloud uploading
 
+## Contributors
+- [archawitch](https://github.com/archawitch)
+- [kittipattan](https://github.com/kittipattan)
+- [PakaponRattanasrisuk](https://github.com/PakaponRattanasrisuk)
+- [totalnoobatthis](https://github.com/totalnoobatthis)
+
 ## Related courses
 
 This project is contributed to CSS451 Cloud Computing and CSS454 Network Security courses at Sirindhorn International Institute of Technology (SIIT), Curriculum year 2021
