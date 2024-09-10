@@ -8,8 +8,10 @@ import secrets
 from typing import List
 import timeit
 from threading import Thread, Barrier
-from aes256 import AESCipher
+from utils.aes256 import AESCipher
 from hashlib import sha256
+import random
+import string
 
 
 def initialize_group(
@@ -23,8 +25,8 @@ def initialize_group(
         for i in range(1, devices_per_node + 1):
             id = (g * devices_per_node) + i
             gid = g + 1
-            data = f"sample data from IoT device {id} {randbytes(73)}"
-            data = f"sample data from IoT device {id}"
+            data = f"sample data from IoT device {id} {''.join(random.choices(string.ascii_letters,k=73))}"
+            # data = f"sample data from IoT device {id}"
 
             iot = IoT(id, gid, id, data)
             if i == 1:
@@ -33,7 +35,7 @@ def initialize_group(
             challenge = random_inputs(64, 128, id)
             challenge = (1 - challenge) // 2
             response = iot.genResponse(challenge)
-            server.registerCRP(id, challenge, response)
+            server.registerCRP(id, gid, challenge, response)
 
             group.append(iot)
 
@@ -125,7 +127,7 @@ def authen_leader_fog(leader: Leader, fog: Fog):
     # Message: {leader.data[:30]}...
     # V: {V.W}
     # r: {r}""")
-    
+
     fog_proof = fog.genProof()
     # print(f"    Fog Private key (prkF) = {str(fog.prk.d)[:10]}...")
     # print(
@@ -134,22 +136,23 @@ def authen_leader_fog(leader: Leader, fog: Fog):
 
     return fog.verifyProof(leader_proof) and leader.verifyProof(fog_proof)
 
+
 def authen_iot_fog(group: List[IoT], fog: Fog):
     threads: List[Thread] = []
-    
+
     for iot in group:
-        t = Thread(target=lambda : fog.recvData(iot.createPacket()))
+        t = Thread(target=lambda: fog.recvData(iot.createPacket()))
         threads.append(t)
         t.start()
-        
+
     for t in threads:
         t.join()
-        
+
     fog.verifyToken(group)
-    
+
 
 def main():
-    fog_nodes = 2
+    fog_nodes = 1
     devices_per_node = 10
 
     IoTs: List[List[IoT]] = []
@@ -193,11 +196,11 @@ def main():
             print(f"Verified within {timeit.default_timer() - start_time}")
         else:
             print("Not verified")
-        
+
         ssk_salt = secrets.token_bytes(16)
         leader.deriveSSK(fog.PK, ssk_salt)
         fog.deriveSSK(leader.PK, ssk_salt)
-        
+
         # print("Leader-Fog:")
         # print(f"    shared symmetric key: {leader.ssk}")
         # print(f"    shared symmetric key: {fog.ssk}")
@@ -206,11 +209,11 @@ def main():
     print("\n")
 
     ######################################## Our Scheme ########################################
-    
+
     # Initialization
-        # Before begin our scheme, Fog node needs to send
-        # a secret and ciphered partial keys to associating groups
-    for (group, fog) in zip(IoTs, fogs):
+    # Before begin our scheme, Fog node needs to send
+    # a secret and ciphered partial keys to associating groups
+    for group, fog in zip(IoTs, fogs):
         leader = group[0]
         enc_packet = fog.sendSecToLeader(group)
         (secret, ciphered_keys) = leader.recvSecFromFog(enc_packet)
@@ -219,46 +222,47 @@ def main():
         # print(f"leader secret and pck: {leader.secret} |||| {leader.partialKey} |||| {len(leader.partialKey)}")
 
         for iot, pck in zip(group, ciphered_keys):
-            if (isinstance(iot, Leader)):
+            if isinstance(iot, Leader):
                 continue
             enc_pkt = leader.sendSecToIoT(iot.id, secret, pck)
             iot.recvSecFromLeader(leader.id, enc_pkt)
             # print(f"iot secret and pck: {iot.secret} |||| {iot.partialKey} |||| {len(iot.partialKey)}")
-    
+
     # Data Authentication
-        # Once the secret and partial ciphered keys are successfully distributed,
-        # each IoT device can start sending the data to Fog node
-    for (group, fog) in zip(IoTs, fogs):
+    # Once the secret and partial ciphered keys are successfully distributed,
+    # each IoT device can start sending the data to Fog node
+    for group, fog in zip(IoTs, fogs):
         leader = group[0]
-        print(
-            f"\nStarting Group {leader.gid} Data Authentication (IoT-Fog) phase..."
-        )
+        print(f"\nStarting Group {leader.gid} Data Authentication (IoT-Fog) phase...")
         start_time = timeit.default_timer()
-        
+
         authen_iot_fog(group, fog)
-        
-        print(f"All {devices_per_node} IoTs data authen success within {timeit.default_timer() - start_time}")
-    
+
+        print(
+            f"All {devices_per_node} IoTs data authen success within {timeit.default_timer() - start_time}"
+        )
+
     # Cloud Uploading
-    for (group, fog) in zip(IoTs, fogs):
+    for group, fog in zip(IoTs, fogs):
         gid = group[0].gid
         fog_id = gid
         upload_threads = []
-        
-        print(
-            f"\nStarting Group {gid} Cloud uploading (Fog-Cloud) phase..."
-        )
+
+        print(f"\nStarting Group {gid} Cloud uploading (Fog-Cloud) phase...")
         start_time = timeit.default_timer()
-    
-        t = Thread(target=fog.uploadToCloud, args=(len(fogs), devices_per_node, fog_id, gid))
+
+        t = Thread(
+            target=fog.uploadToCloud, args=(len(fogs), devices_per_node, fog_id, gid)
+        )
         upload_threads.append(t)
         t.start()
-        
+
         for t in upload_threads:
             t.join()
-            
-        print(f"Fog {gid} cloud uploading success within {timeit.default_timer() - start_time}")
-        
+
+        print(
+            f"Fog {gid} cloud uploading success within {timeit.default_timer() - start_time}"
+        )
 
     #################################### End of Our Scheme ####################################
 

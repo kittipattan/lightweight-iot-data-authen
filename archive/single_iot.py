@@ -4,12 +4,12 @@ import leader
 import fog
 import iot
 import hashlib
-import utils
+import utils.utils as utils
 import random
 import string
-from aes256 import AESCipher
-from archive.measurement import measure_computation_cost
-from nizkp import generate_proof, verify_proof
+from utils.aes256 import AESCipher
+from utils.measurement import measure_computation_cost
+from utils.nizkp import generate_proof, verify_proof
 from base64 import b64encode, b64decode
 from hashlib     import sha256
 from ecpy.keys   import ECPublicKey, ECPrivateKey

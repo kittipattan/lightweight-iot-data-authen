@@ -1,7 +1,7 @@
 from hashlib import sha256
 from pypuf.simulation import ArbiterPUF
 import secrets
-from aes256 import AESCipher
+from utils.aes256 import AESCipher
 from datetime import datetime
 import json
 import numpy as np

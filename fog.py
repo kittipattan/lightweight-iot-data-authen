@@ -1,10 +1,10 @@
 import secrets
-from aes256 import AESCipher
+from utils.aes256 import AESCipher
 from ecpy.curves import Curve
 from ecpy.keys import ECPublicKey, ECPrivateKey
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from nizkp import generate_proof_fog, verify_proof
+from utils.nizkp import generate_proof_fog, verify_proof
 from hashlib import sha256
 from typing import List
 from iot import IoT
@@ -14,7 +14,6 @@ import os
 from dotenv import load_dotenv
 from azure.storage.blob import BlobServiceClient
 import json
-
 
 ###### (1) Group Authentication ######
 

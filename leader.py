@@ -3,11 +3,11 @@ from ecpy.keys   import ECPublicKey, ECPrivateKey
 from ecpy.curves import Curve
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from nizkp import generate_proof, verify_proof_fog
+from utils.nizkp import generate_proof, verify_proof_fog
 from iot import IoT
 import secrets
 from datetime import datetime
-from aes256 import AESCipher
+from utils.aes256 import AESCipher
 import json
 from typing import Tuple
 

@@ -1,7 +1,7 @@
 import mysql.connector
 import base64
-from utils import hash_sha256
-from measurement import measure_computation_cost
+from utils.utils import hash_sha256
+from utils.measurement import measure_computation_cost
 
 dummy = []  
 

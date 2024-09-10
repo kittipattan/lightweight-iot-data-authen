@@ -2,7 +2,7 @@ import json
 import mysql.connector
 import secrets
 from hashlib import sha256
-from aes256 import AESCipher
+from utils.aes256 import AESCipher
 import numpy as np
 from typing import Tuple
 import os
@@ -25,13 +25,16 @@ class LocalServer():
         self.__connection.commit()
 
     # Enrollment
-    def registerCRP(self, id, challenge, response): # assume to perform over secure channel
-        stmt = f'INSERT INTO crps (id, challenge, response) VALUES (%s, %s, %s)'
-        json_data = (id, json.dumps(challenge.tolist()), response.hex())
-        self.__cursor.execute(stmt, json_data)
+    def registerCRP(
+        self, id, gid, challenge, response
+    ):  # assume to perform over secure channel
+        stmt = f"INSERT INTO crps (id, gid, challenge, response) VALUES (%s, %s, %s, %s)"
+        data = (id, gid, json.dumps(challenge.tolist()), response.hex())
+        self.__cursor.execute(stmt, data)
         self.__connection.commit()
 
         return self.__cursor.rowcount
+
     
     def genEnrollReq(self, id: int, pairing_id: int):
         stmt = f'SELECT challenge FROM crps WHERE id = %s'
