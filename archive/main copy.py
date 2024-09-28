@@ -43,7 +43,24 @@ def authen_leader_fog(leader: LeaderPi, fog: Fog):
     leader_proof = leader.genProof(leader.data)
     (PKL, id, gid, M, V, r) = leader_proof
 
+    # print(f"    Leader {leader.id} Private key (prkL) = {str(leader.prk.d)[:10]}...")
+    # print(
+    #     f"    Leader {leader.id} Public key (PKL) = ({str(leader.PK.W.x)[:10]}..., {str(leader.PK.W.y)[:10]}...)"
+    # )
+
+    # print(f"""Data sent to Fog
+    # PK: {leader.PK.W}
+    # id: {leader.id}
+    # gid: {leader.gid}
+    # Message: {leader.data[:30]}...
+    # V: {V.W}
+    # r: {r}""")
+
     fog_proof = fog.genProof()
+    # print(f"    Fog Private key (prkF) = {str(fog.prk.d)[:10]}...")
+    # print(
+    #     f"    Fog Public key (PKF) = ({str(fog.PK.W.x)[:10]}..., {str(fog.PK.W.y)[:10]}...)"
+    # )
 
     return fog.verifyProof(leader_proof) and leader.verifyProof(fog_proof)
 
@@ -59,6 +76,7 @@ def authen_iot_fog(group: List[IoTPi], fog: Fog):
     for t in threads:
         t.join()
 
+    # measure_computation_cost(fog.verifyToken, "Token verification", 1, group)
     fog.verifyToken(group)
 
 def main(fog_nodes, devices_per_node):
@@ -94,10 +112,43 @@ def main(fog_nodes, devices_per_node):
         # Secret Generation
         fog.deriveDeviceKey(device_crps, group)
 
+    # print(f"Initialization successful within {timeit.default_timer() - start_time} s")
+    
+    # for group in IoTs:
+    #     leader = group[0]  # first member is Leader
+    #     puf_based_authen(group, leader, server)
+
+    # print(
+    #     " \n##################################### Sending Group Key #####################################\n "
+    # )
+    # # Send packet to each IoT
+    # for group in IoTs:
+    #     leader = group[0]
+    #     print(f"Starting Group {leader.gid} sending group key...")
+
+    #     for iot in group:
+    #         if isinstance(iot, Leader):
+    #             iot.genGroupKey()
+    #             continue
+    #         pkt = leader.sendGroupKey(iot.id)
+    #         iot.recvGroupKey(pkt)
+    #         # print(f"    Group Key: {iot.gk}")
+
+    #     print(f"Group {leader.gid} sending group key successful")
+    ############################## End of PUF-based Authentication ##############################
+
+    # print(
+    #     " \n####################################### Leader - Fog ########################################\n "
+    # )
+
     # PHASE 3: Group Authentication and Secure Channel Establishment with Fog Node
     for group, fog in zip(IoTs, fogs):
         leader: LeaderPi = group[0]
-        
+
+        # print(
+        #     f" ---------------------- Group {leader.gid} Group Authentication (Leader-Fog) phase ---------------------- "
+        # )
+
         is_verified = authen_leader_fog(leader, fog)
         if is_verified:
             print(f"Verified")
@@ -107,6 +158,17 @@ def main(fog_nodes, devices_per_node):
         ssk_salt = os.urandom(32)
         leader.deriveSSK(fog.PK, ssk_salt)
         fog.deriveSSK(leader.PK, ssk_salt)
+
+        # print(f"Leader-Fog: {(timeit.default_timer() - start_time)*1000} ms")
+
+        # print("Leader-Fog:")
+        # print(f"    shared symmetric key: {leader.ssk}")
+        # print(f"    shared symmetric key: {fog.ssk}")
+    ####################################### End of NIZKP #######################################
+
+    # print(
+    #     " \n######################################### IoT - Fog #########################################\n "
+    # )
 
     # PHASE 4: Data Authentication and Integrity Verification
     for group, fog in zip(IoTs, fogs):
@@ -119,10 +181,26 @@ def main(fog_nodes, devices_per_node):
         
         # Secret distribution
         leader.distributeSecret(messages_to_leader, group)
+        
+        # enc_packet = fog.sendSecToLeader(group)
+        # (secret, ciphered_keys) = leader.recvSecFromFog(enc_packet)
+        # leader.secret = secret
+        # leader.partialKey = ciphered_keys[0]
+        # # print(f"leader secret and pck: {leader.secret} |||| {leader.partialKey} |||| {len(leader.partialKey)}")
+
+        # for iot, pck in zip(group, ciphered_keys):
+        #     if isinstance(iot, Leader):
+        #         continue
+        #     enc_pkt = leader.sendSecToIoT(iot.id, secret, pck)
+        #     iot.recvSecFromLeader(leader.id, enc_pkt)
+        #     # print(f"iot secret and pck: {iot.secret} |||| {iot.partialKey} |||| {len(iot.partialKey)}")
 
     # Data Authentication
     for group, fog in zip(IoTs, fogs):
         leader = group[0]
+        # print(
+        #     f" ---------------------- Group {leader.gid} Data Authentication (IoT-Fog) phase -------------------------- "
+        # )
         
         def test_data_authentication():
             authen_leader_fog(leader, fog)
@@ -134,7 +212,7 @@ def main(fog_nodes, devices_per_node):
             leader.distributeSecret(messages_to_leader, group)          
             authen_iot_fog(group, fog)
     
-        measure_computation_cost(test_data_authentication, "Data Authentication", 1000)
+        measure_computation_cost(test_data_authentication, "Device Authentication By Group Size", 1000)
         
         def test_throughput():
             authen_leader_fog(leader, fog)
@@ -173,11 +251,19 @@ def main(fog_nodes, devices_per_node):
 
         # print(f"All {devices_per_node} IoTs data authen success")
 
+    # print(
+    #     " \n######################################## Fog - Cloud ########################################\n "
+    # )
+
     # Cloud Uploading
     for group, fog in zip(IoTs, fogs):
         gid = group[0].gid
         fog_id = gid
         upload_threads = []
+
+        # print(
+        #     f" ---------------------- Group {gid} Cloud uploading (Fog-Cloud) phase ---------------------------- "
+        # )
 
         t = Thread(
             target=fog.uploadToCloud, args=(len(fogs), devices_per_node, fog_id, gid)
@@ -188,9 +274,13 @@ def main(fog_nodes, devices_per_node):
         for t in upload_threads:
             t.join()
 
+        # print(f"Fog {gid} cloud uploading success")
+
+    #################################### End of Our Scheme ####################################
+
     return 0
 
 
 if __name__ == "__main__":
-    for n in [1,5,10,50,100,200,500,1000]:
+    for n in [1,2,4,10,20,50,100]:
         main(1,n)

@@ -5,9 +5,12 @@ from utils.aes256 import AESCipher
 from datetime import datetime
 import json
 import numpy as np
+from typing import Tuple
+import hmac
+
 
 class IoT:
-    def __init__(self, id: int, gid: int, seed: int, data, n_challenge=64) -> None:
+    def __init__(self, id: int, gid: int, seed: int, data, n_challenge=64):
         # Our scheme
         self.id = id
         self.gid = gid
@@ -15,7 +18,7 @@ class IoT:
         self.secret = None
         self.partialKey = None
         self.data = data
-
+        
         # PUF-based authentication
         self.CRP = None
         self.tmpPairing_challenge = None
@@ -32,7 +35,7 @@ class IoT:
         response = self.puf.eval(challenge)
         response = np.abs(response)
 
-        return int("".join(str(r) for r in response), 2).to_bytes(16)
+        return int("".join(str(r) for r in response), 2).to_bytes(32)
 
     # Enrollment/Update phase
     def genAuth(self, m):
@@ -93,21 +96,52 @@ class IoT:
             return self.timestamp == timestamp_prime
         except:
             raise Exception("Mutual Authentication failed: reject proof from Leader")
-
-    # Key Exchange
+        
     def exchangeKey(self):
         self.localDatabase[self.pairing_id] = sha256(
             self.nonces["n"] + self.nonces["pairing_n"]
         ).digest()
         
-    # Our scheme
-    def recvSecFromLeader(self, leader_id: int, enc_packet: bytes):
-        (secret, partial_ciphered_key) = AESCipher(self.localDatabase[leader_id]).decrypt(enc_packet).split('||||')
+    def recvSecFromLeader(self, leader_id: int, pkt: Tuple[bytes, bytes]):
+        (enc_secret, partial_ciphered_key) = pkt
+        secret = AESCipher(self.localDatabase[leader_id]).decrypt(enc_secret)
         self.secret = bytes.fromhex(secret)
-        self.partialKey = bytes.fromhex(partial_ciphered_key)
+        self.partialKey = partial_ciphered_key
 
-    def generateToken(self):
-        return sha256(f"{self.gid}{self.id}{self.data}{self.partialKey}{self.secret}".encode()).digest()
 
-    def createPacket(self):
-        return (self.id, self.gid, self.data, self.partialKey, self.generateToken())
+class GroupIoT(IoT):
+    def __init__(self, id, gid, seed, data, n_challenge=64):
+        super().__init__(id, gid, seed, data, n_challenge)
+        self.gk: bytes = None
+
+    def recvGroupKey(self, pkt: Tuple[bytes, bytes, np.ndarray]):
+        (enc_msg, mac_leader, leader_id) = pkt
+        sk_puf = self.localDatabase[leader_id]
+        
+        # Message into HMAC generation
+        concat_msg = f"{enc_msg.hex()}{leader_id}"
+        
+        # Verify MAC
+        mac_iot = hmac.new(sk_puf, concat_msg.encode(), sha256).digest()
+        if not hmac.compare_digest(mac_leader, mac_iot):
+            assert Exception("Leader MAC invalid")
+
+        # Decrypt the received packet
+        msg = AESCipher(sk_puf).decrypt(enc_msg)
+        (gk, timestamp) = msg.split("||||")
+
+        # Verify timestamp
+        timestamp = datetime.strptime(timestamp, "%m/%d/%Y, %H:%M:%S")
+        timestamp_iot = datetime.now()
+
+        if (timestamp_iot - timestamp).total_seconds() > 3:
+            assert Exception("Leader timestamp exceed limit")
+
+        # Store Group Key
+        self.gk = bytes.fromhex(gk)
+        
+    def recvSecFromLeader(self, leader_id: int, pkt: Tuple[bytes, bytes]):
+        (enc_secret, partial_ciphered_key) = pkt
+        secret = AESCipher(self.gk).decrypt(enc_secret)
+        self.secret = bytes.fromhex(secret)
+        self.partialKey = partial_ciphered_key
