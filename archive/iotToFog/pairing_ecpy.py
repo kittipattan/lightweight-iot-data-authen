@@ -5,10 +5,12 @@ import secrets
 import timeit
 
 # Define the elliptic curve using ECPy's built-in curves
-curve = Curve.get_curve('secp256k1')  # You can change the curve to match your requirement
+curve = Curve.get_curve('Curve25519')  # You can change the curve to match your requirement
+P = curve.generator
+Q = ECPrivateKey(secrets.randbelow(curve.order), curve).get_public_key().W
 
 class EllipticCurve:
-    def __init__(self):
+    def __init__(self, curve):
         self.curve = curve
 
     def is_on_curve(self, P):
@@ -91,8 +93,8 @@ def point_to_hash(point):
     return int.from_bytes(hashlib.sha256(f"{x}{y}".encode()).digest())
 
 if __name__ == "__main__":
-    c = EllipticCurve()
+    c = EllipticCurve(curve)
 
     start = timeit.default_timer()
-    c.point_multiplication(curve.generator, ECPrivateKey(secrets.randbits(16), curve).d)
+    c.bilinear_pairing(P, Q)
     print(f"{(timeit.default_timer() - start)*1000:.5f}")

@@ -3,16 +3,13 @@ import os
 import secrets
 from utils.aes256 import AESGCMCipher, AESCBCCipher
 from utils.measurement import measure_computation_cost
-from ecdsa import SigningKey, VerifyingKey, NIST256p, ECDH
+from ecpy.curves import Curve
+from ecpy.keys import ECPublicKey, ECPrivateKey
 import numpy as np
 from typing import Tuple
 import time
 import blake3 as b3
 import hmac
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
-from ecdsa.numbertheory import inverse_mod
 import hashlib
 import struct
 import random
@@ -32,12 +29,17 @@ class IoTPi:
         # PUF-based authentication
         self.puf = ArbiterPUF(n=n_challenge, seed=seed)
         self.gk: bytes = None
-        self.mk: bytes = None
 
         self.CRP = None
+        # self.tmpPairing_challenge = None
+        # self.nonces = {"m": None, "x": None, "n": None, "pairing_n": None}
         self.nonces = {"m": None, "n": None}
+        # self.tmpID = -1
         self.localDatabase = {}
         self.timestamp = None
+        # self.pairing_timestamp = None
+        # self.pairing_id: int = -1
+        # self.p_1 = None
         self.responseKey = None
 
     def genResponse(self, challenge):
@@ -50,7 +52,7 @@ class IoTPi:
     # Fog only
 
     # PHASE 2: Key Exchange
-    def recvPairKey(self, pkt: Tuple[np.ndarray, int, bytes, float, bytes, bytes]):
+    def recvKeys(self, pkt: Tuple[np.ndarray, int, bytes, float, bytes, bytes]):
         (challenge, pairing_id, nonce_key, timestamp, nonce_gcm, enc_msg) = pkt
 
         # Validate timestamp
@@ -61,9 +63,7 @@ class IoTPi:
         self.CRP = (challenge, self.genResponse(challenge))
 
         # Derive the key
-        self.responseKey = hashlib.sha256(
-            (self.CRP[1] + self.id.to_bytes(4) + nonce_key)
-        ).digest()
+        self.responseKey = hashlib.sha256((self.CRP[1] + self.id.to_bytes(4) + nonce_key)).digest()
 
         # Decrypt the msg
         assoc_data = (
@@ -73,88 +73,54 @@ class IoTPi:
             + struct.pack("d", timestamp)
             + nonce_gcm
         )
-        secret = AESGCMCipher(self.responseKey).decrypt(nonce_gcm, enc_msg, assoc_data)
+        secret = AESGCMCipher(self.responseKey).decrypt(
+            nonce_gcm, enc_msg, assoc_data
+        )
 
         # Store pairKey with device pairing_id
         self.localDatabase[pairing_id] = secret[:32]
 
         # Store group key
-        # self.gk = secret[32:]
+        self.gk = secret[32:]
 
-    # PHASE 3: Group Key Generation
-    def recvGroupKey(self, packet: Tuple[bytes, int, float, bytes]):
-        encrypted_msg, leader_id, timestamp_leader, n_gcm = packet
-
-        # Validate timestamp
-        if abs(time.time() - timestamp_leader) >= 120:
-            raise Exception("Timestamp is too old or too far in the future")
-
-        assoc_data = (
-            leader_id.to_bytes(4)
-            + self.id.to_bytes(4)
-            + struct.pack("d", timestamp_leader)
-            + n_gcm
-        )
-        
-        K = AESGCMCipher(self.localDatabase[leader_id]).decrypt(
-            nonce=n_gcm, ciphertext=encrypted_msg, associated_data=assoc_data
-        )
-        
-        # Store Group key and MAC generation key
-        self.gk = K[:32]
-        self.mk = K[32:]
-        
-    # PHASE 4: Group Authentication
+    # PHASE 3: Group Authentication
     # Leader and Fog
 
-    # PHASE 5: Data Authentication
+    # PHASE 4: Data Authentication
     def recvSecret(self, pkt: Tuple[bytes, bytes, float, bytes]):
-        (enc_group_secret, partial_key, timestamp_leader, mac) = pkt
+        (enc_secret, partial_key, timestamp, mac) = pkt
 
         # Validate timestamp
-        if abs(time.time() - timestamp_leader) >= 120:
+        if abs(time.time() - timestamp) >= 300:
             raise Exception("Timestamp is too old or too far in the future")
 
         # Verify MAC
         mac_data = (
-            self.id.to_bytes(4)
-            + enc_group_secret
-            + partial_key
-            + struct.pack("d", timestamp_leader)
+            self.id.to_bytes(4) + enc_secret + partial_key + struct.pack("d", timestamp)
         )
         # mac_device = b3.blake3(mac_data, key=self.gk).digest()
-        mac_device = hmac.new(
-            msg=mac_data, key=self.mk, digestmod=hashlib.sha256
-        ).digest()
-
+        mac_device = hmac.new(msg=mac_data, key=self.gk, digestmod=hashlib.sha256).digest()
+        
         # print(f"iot gk: {self.gk}")
         # print(f"mac {self.id}: {mac}")
         # print(f"mac_device {self.id}: {mac_device}")
-
+        
         # if mac_device != mac:
         if not hmac.compare_digest(mac_device, mac):
             raise Exception("IoT MAC mismatch")
 
         # Decrypt secret
-        self.secret = AESCBCCipher(self.gk).decrypt(enc_group_secret)
+        self.secret = AESCBCCipher(self.gk).decrypt(enc_secret)
         self.partialKey = partial_key
 
     # 4. Token Generation
     def generateToken(self, timestamp):
-        # print(f"gid: {self.gid.to_bytes(4)}")
-        # print(f"id: {self.id.to_bytes(4)}")
-        # print(f"timestamp: {struct.pack("d", timestamp)}")
-        # print(f"partialKey: {self.partialKey}")
-        # print(f"data: {self.data}")
-        data = (
-            self.gid.to_bytes(4) + self.id.to_bytes(4) + struct.pack("d", timestamp) + self.partialKey + self.data
-        )
-
+        data = self.gid.to_bytes(4) + self.id.to_bytes(4) + struct.pack("d", timestamp) + self.partialKey + self.data
         # data = self.gid.to_bytes(4) + self.id.to_bytes(4) + self.partialKey + self.data
         # token = b3.blake3(data, key=self.secret).digest()
         # token = hashlib.blake2b(data, digest_size=32, key=self.secret, usedforsecurity=True).digest()
         token = hmac.new(self.secret, data, hashlib.sha256).digest()
-
+        
         return token
 
     def createPacket(self):
@@ -163,14 +129,7 @@ class IoTPi:
         # print(f"Token gen within: {(timeit.default_timer() - start_time)*1000} ms")
         timestamp = time.time()
 
-        return (
-            self.gid,
-            self.id,
-            timestamp,
-            self.partialKey,
-            self.data,
-            self.generateToken(timestamp),
-        )
+        return (self.gid, self.id, timestamp, self.partialKey, self.data, self.generateToken(timestamp))
 
     # Recovery phase
     def updateGroupKey(self, pkt: Tuple[bytes, int, float, bytes]):
@@ -236,111 +195,99 @@ def main():
     data = random.randbytes(200)
     iot = IoTPi(1, 1, 1, data.hex())
     id = iot.id
-
-    curve = NIST256p
-    ecc_generator = curve.generator
-    ecc_field = curve.curve.p()
-    ecc_int1 = secrets.randbelow(curve.order)
-    ecc_int2 = secrets.randbelow(curve.order)
-    ecc_sk = SigningKey.generate(curve, hashfunc=hashlib.sha256)
-    ecc_vk = ecc_sk.verifying_key
-    ecdh_key = (ecc_int1 * ecc_int2 * ecc_generator).x().to_bytes(32)
-
-    salt = os.urandom(16)
+    curve = Curve.get_curve("Curve25519")
+    ecc_point = curve.generator
+    ecc_int = secrets.randbits(256)
+    ecc_privkey = ECPrivateKey(ecc_int, curve)
+    ecc_pubkey = ecc_privkey.get_public_key()
+    ecc_privpub = (ecc_privkey.d * ecc_pubkey.W).x.to_bytes(32)
+    ecc_salt = os.urandom(16)
+    ecc_field = curve.field
     aes_key = os.urandom(32)
     aes_nonce = os.urandom(12)
     aes_assoc_data = struct.pack("d", time.time())
-
     puf_challenge = random_inputs(64, 256, id)
     puf_challenge = (1 - puf_challenge) // 2
 
-    iterations = 1000
+    # # Hashing operations
+    # measure_computation_cost(b3.blake3(data).digest, "T_h (Hashing operation)", 100000)
 
-    # Hashing operations
-    # measure_computation_cost(b3.blake3(data).digest, "T_h (Hashing operation)", 10000)
-    measure_computation_cost(
-        hashlib.sha256(data).digest, "T_h (Hashing operation)", 10000
-    )
-
-    # ECC point addition
-    measure_computation_cost(
-        lambda: ecc_generator + ecc_generator, "T_ea (ECC point addition)", iterations
-    )
+    # # ECC point addition
+    # measure_computation_cost(
+    #     curve.add_point, "T_ea (ECC point addition)", 1000, ecc_point, ecc_point
+    # )
 
     # ECC point multiplication
     measure_computation_cost(
-        lambda: ecc_int1 * ecc_generator, "T_em (ECC point multiplication)", iterations
+        curve.mul_point, "T_em (ECC point multiplication)", 1000, ecc_int, ecc_point
     )
-
-    # Modular multiplicative inverse
+    
     measure_computation_cost(
-        lambda x, p: pow(x, -1, p),
-        "T_mi (Modular multiplicative inverse)",
-        10000,
-        ecc_int1,
-        ecc_field,
+        ecc_privkey.get_public_key, "T_em2 (ECC point multiplication)", 1000
     )
 
-    # Symmetric encryption
-    measure_computation_cost(
-        AESGCMCipher(aes_key).encrypt,
-        "T_s (Symmetric encryption)",
-        10000,
-        aes_nonce,
-        data,
-        aes_assoc_data,
-    )
+    # # Modular multiplicative inverse
+    # measure_computation_cost(
+    #     lambda x, p: pow(x, -1, p),
+    #     "T_mi (Modular multiplicative inverse)",
+    #     100000,
+    #     ecc_int,
+    #     ecc_field,
+    # )
 
-    # Bilinear pairing
+    # # Symmetric encryption
+    # measure_computation_cost(
+    #     AESGCMCipher(aes_key).encrypt,
+    #     "T_s (Symmetric encryption)",
+    #     100000,
+    #     aes_nonce,
+    #     data,
+    #     aes_assoc_data,
+    # )
 
-    # Fuzzy extraction
+    # # Bilinear pairing
 
-    # PUF response generation
-    measure_computation_cost(
-        iot.puf.eval, "T_PUF (PUF response generation)", iterations, puf_challenge
-    )
+    # # Fuzzy extraction
 
-    # Key derivation function
+    # # PUF response generation
+    # measure_computation_cost(
+    #     iot.puf.eval, "T_PUF (PUF response generation)", 1000, puf_challenge
+    # )
+
+    # # Key derivation function
     # measure_computation_cost(
     #     b3.blake3(
-    #         (ecdh_key + salt),
+    #         (ecc_privpub + ecc_salt),
     #         derive_key_context="LightPUF IoT 2024-09-26 01:47:29 Derive key in Group Authentication",
     #     ).digest,
     #     "T_KDF (Key Derivation Function)",
-    #     iterations,
+    #     100000,
     # )
-
-    def hkdf_perf():
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            info=b"LightPUF IoT 2024-09-26 01:47:29 Derive key in Group Authentication",
-            backend=default_backend(),
-        )
-        hkdf_result = hkdf.derive(ecdh_key)
-
-    measure_computation_cost(hkdf_perf, "HKDF", iterations)
 
     # Message Authentication Code (MAC) function
-    # measure_computation_cost(
-    #     b3.blake3(data, key=aes_key).digest,
-    #     "T_MAC (BLAKE3) (Message Authentication Code function)",
-    #     100000,
-    # )
+    measure_computation_cost(
+        b3.blake3(data, key=aes_key).digest,
+        "T_MAC (BLAKE3) (Message Authentication Code function)",
+        100000,
+    )
 
-    # measure_computation_cost(
-    #     hashlib.blake2b(data, digest_size=32, key=aes_key).digest,
-    #     "T_MAC (BLAKE2b) (Message Authentication Code function)",
-    #     100000,
-    # )
-
+    measure_computation_cost(
+        hashlib.blake2b(data, digest_size=32, key=aes_key).digest,
+        "T_MAC (BLAKE2b) (Message Authentication Code function)",
+        100000,
+    )
+    
+    measure_computation_cost(
+        hashlib.sha256(data).digest,
+        "T_MAC (SHA256) (Message Authentication Code function)",
+        100000,
+    )
+    
     measure_computation_cost(
         hmac.new(aes_key, data, hashlib.sha256).digest,
         "T_MAC (HMAC) (Message Authentication Code function)",
         100000,
     )
-
-
+    
 if __name__ == "__main__":
     main()

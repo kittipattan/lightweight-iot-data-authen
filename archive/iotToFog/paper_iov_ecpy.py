@@ -7,7 +7,7 @@ from pairing_ecpy import EllipticCurve, hash_function, point_to_hash
 from ecpy.curves import Curve
 
 # Parameters (using the secp256k1 curve as an example)
-curve = Curve.get_curve('secp256k1')
+curve = Curve.get_curve('Curve25519')
 EC = EllipticCurve(curve)
 
 q = curve.order

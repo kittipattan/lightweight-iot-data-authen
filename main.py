@@ -8,6 +8,8 @@ from typing import List
 from threading import Thread
 import random
 import string
+import math
+import timeit
 from utils.measurement import measure_computation_cost
 
 
@@ -40,24 +42,24 @@ def initialize_group(
 
 
 def authen_leader_fog(leader: LeaderPi, fog: Fog):
-    leader_proof = leader.genProof(leader.data)
-    (PKL, id, gid, M, V, r) = leader_proof
-
+    leader_proof = leader.genProof()
+    # measure_computation_cost(leader.genProof, "Leader NIZKP Proof", 1000, leader.data)
     fog_proof = fog.genProof()
-
-    return fog.verifyProof(leader_proof) and leader.verifyProof(fog_proof)
-
+    # measure_computation_cost(fog.verifyProof, "Fog NIZKP Verify", 1000, leader_proof)
+    fog.verifyProof(leader_proof)
+    leader.verifyProof(fog_proof)
 
 def authen_iot_fog(group: List[IoTPi], fog: Fog):
     threads: List[Thread] = []
 
     for iot in group:
-        t = Thread(target=lambda: fog.recvData(iot.createPacket()))
-        threads.append(t)
-        t.start()
+        # t = Thread(target=lambda: fog.recvData(iot.createPacket()))
+        # threads.append(t)
+        # t.start()
+        fog.recvData(iot.createPacket())
 
-    for t in threads:
-        t.join()
+    # for t in threads:
+    #     t.join()
 
     fog.verifyToken(group)
 
@@ -89,33 +91,26 @@ def main(fog_nodes, devices_per_node):
             # CRP retrieval
             device_crps.append(server.sendCRP(iot.id))
             
-        # Pair Key and Nonces Generation + 
-        # Device Key Generation +
-        # Secret Generation
+        # PHASE 2: Key Exchange
         fog.deriveDeviceKey(device_crps, group)
+        
+    # PHASE 3: Group Key Generation
+    for group in IoTs:
+        leader: LeaderPi = group[0]
+        leader.sendGroupKey(group)
 
-    # PHASE 3: Group Authentication and Secure Channel Establishment with Fog Node
+    # PHASE 4: Group Authentication and Secure Channel Establishment with Fog Node
     for group, fog in zip(IoTs, fogs):
         leader: LeaderPi = group[0]
-        
-        is_verified = authen_leader_fog(leader, fog)
-        if is_verified:
-            print(f"Verified")
-        else:
-            print("Not verified")
+        authen_leader_fog(leader, fog)
 
-        ssk_salt = os.urandom(32)
-        leader.deriveSSK(fog.PK, ssk_salt)
-        fog.deriveSSK(leader.PK, ssk_salt)
-
-    # PHASE 4: Data Authentication and Integrity Verification
+    # PHASE 5: Data Authentication and Integrity Verification
     for group, fog in zip(IoTs, fogs):
         leader = group[0]
-        group_key_to_fog = leader.sendGK()
         
         # Secret Generation +
         # AES Key Encryption and Key Splitting
-        messages_to_leader = fog.genSec(group_key_to_fog, group)
+        messages_to_leader = fog.genSec(group)
         
         # Secret distribution
         leader.distributeSecret(messages_to_leader, group)
@@ -123,33 +118,29 @@ def main(fog_nodes, devices_per_node):
     # Data Authentication
     for group, fog in zip(IoTs, fogs):
         leader = group[0]
+        # [print(iot.id, end=" ") for iot in group]
+        # authen_iot_fog(group, fog)
         
         def test_data_authentication():
             authen_leader_fog(leader, fog)
-            ssk_salt = os.urandom(32)
-            leader.deriveSSK(fog.PK, ssk_salt)
-            fog.deriveSSK(leader.PK, ssk_salt)
-            group_key_to_fog = leader.sendGK()
-            messages_to_leader = fog.genSec(group_key_to_fog, group)   
-            leader.distributeSecret(messages_to_leader, group)          
+            messages_to_leader = fog.genSec(group)
+            leader.distributeSecret(messages_to_leader, group)    
             authen_iot_fog(group, fog)
-    
-        measure_computation_cost(test_data_authentication, "Data Authentication", 1000)
+
+        # Data Authentication
+        # measure_computation_cost(test_data_authentication, "Data Authentication", 1000)
         
         def test_throughput():
             authen_leader_fog(leader, fog)
-            ssk_salt = b'\x91\x8a\xb7\xf8\x05\xea{\x93\x04;\x83wJ\x9ef89\xf3\x95\xa3\x94\x8d\xbb\x18\x01j\xde\xcbN\x8e\x04\xa2'
-            leader.deriveSSK(fog.PK, ssk_salt)
-            fog.deriveSSK(leader.PK, ssk_salt)
-            group_key_to_fog = leader.sendGK()
-            messages_to_leader = fog.genSec(group_key_to_fog, group)
+            messages_to_leader = fog.genSec(group)
             leader.distributeSecret(messages_to_leader, group)
             authen_iot_fog(group, fog)
 
+        # Throughput
         # r = 10
         # batch_size = 50
         # print(f"Our - Throughput")
-        # for no_request in [1, 2, 4, 10, 50, 100, 200, 500, 1000, 5000, 10000]:
+        # for no_request in [500]:
         #     threads = []
         #     throughput = 0
         #     for _ in range(r):
@@ -169,28 +160,29 @@ def main(fog_nodes, devices_per_node):
         #             throughput += no_request
         #     print(f"Concurrent devices: {no_request}, Throughput: {throughput/r:.2f} transactions/sec")
         
-        # measure_computation_cost(authen_iot_fog, "Authen IoT-Fog", 100, group, fog)
+        # # measure_computation_cost(authen_iot_fog, "Authen IoT-Fog", 100, group, fog)
 
         # print(f"All {devices_per_node} IoTs data authen success")
 
     # Cloud Uploading
     for group, fog in zip(IoTs, fogs):
-        gid = group[0].gid
-        fog_id = gid
-        upload_threads = []
+        # gid = group[0].gid
+        # fog_id = gid
+        # upload_threads = []
 
-        t = Thread(
-            target=fog.uploadToCloud, args=(len(fogs), devices_per_node, fog_id, gid)
-        )
-        upload_threads.append(t)
-        t.start()
+        # t = Thread(
+        #     target=fog.uploadToCloud, args=(len(fogs), devices_per_node, fog_id, gid)
+        # )
+        # upload_threads.append(t)
+        # t.start()
 
-        for t in upload_threads:
-            t.join()
+        # for t in upload_threads:
+        #     t.join()
+        pass
 
     return 0
 
 
 if __name__ == "__main__":
-    for n in [1,5,10,50,100,200,500,1000]:
+    for n in [100]:
         main(1,n)

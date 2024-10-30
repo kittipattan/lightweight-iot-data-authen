@@ -2,7 +2,7 @@ import secrets
 import sys
 import archive.leader as leader
 import fog
-import archive.iot as iot
+import iot_confer as iot_confer
 import hashlib
 import utils.utils as utils
 import random
@@ -36,7 +36,7 @@ gid = 12345678
 s = str(secrets.randbits(128))
 
 # IoT token
-token = iot.generate_token(str(gid), str(id), s, data)
+token = iot_confer.generate_token(str(gid), str(id), s, data)
 
 # Fog AES key
 fog_key = secrets.token_bytes(32)
@@ -182,7 +182,7 @@ def iot_task_2():
     return
 
 def iot_task_3():
-    iot.generate_token(str(gid), str(id), s, data)
+    iot_confer.generate_token(str(gid), str(id), s, data)
     return
 
 def fog_task_1():

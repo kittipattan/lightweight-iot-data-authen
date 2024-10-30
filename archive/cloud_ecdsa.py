@@ -8,7 +8,7 @@ from ecpy.ecdsa  import ECDSA
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 
 # Public data
-curve_name = "secp256k1"
+curve_name = "Curve25519"
 curve = Curve.get_curve(curve_name) # known to Fog already
 G = curve.generator
 n = curve.order
@@ -96,18 +96,19 @@ def aggregate_data(fog_node_index, fog_data_store):
 def upload_to_azure(fog_node_index, aggregated_data, fog_nodes, devices_per_node):
     try:
         # initialize a connection to Azure Blob Storage
-        connect_str = ""    # to add connection
-        blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-        container_name = "iiot-data-authentication-to-cloud"
-        blob_name = f"ecdsa/fog_no_{fog_nodes}/device_no_{devices_per_node}/ecdsa_aggregated_data_{gid[fog_node_index]}.json"
+        # connect_str = ""    # to add connection
+        # blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+        # container_name = "iiot-data-authentication-to-cloud"
+        # blob_name = f"ecdsa/fog_no_{fog_nodes}/device_no_{devices_per_node}/ecdsa_aggregated_data_{gid[fog_node_index]}.json"
         
-        # convert aggregated data to JSON
-        data = json.dumps(aggregated_data)
+        # # convert aggregated data to JSON
+        # data = json.dumps(aggregated_data)
         
-        # upload data
-        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
-        blob_client.upload_blob(data, overwrite=True)
-        # print(f"Uploaded aggregated data of fog node {gid[fog_node_index]} to Azure Blob Storage.")
+        # # upload data
+        # blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+        # blob_client.upload_blob(data, overwrite=True)
+        # # print(f"Uploaded aggregated data of fog node {gid[fog_node_index]} to Azure Blob Storage.")
+        pass
     
     except Exception as e:
         # print(f"Error uploading data for fog node {gid[fog_node_index]}: {e}")
@@ -166,53 +167,53 @@ def main():
     print(f"Traditional scheme: {time_taken}")
 
     # measure fog
-    time_taken_fog_increase = []
-    for f in [5, 15, 50]:
+    # time_taken_fog_increase = []
+    # for f in [5, 15, 50]:
         
-        # IoT Data
-        fog_nodes = f
-        devices_per_node = 50
+    #     # IoT Data
+    #     fog_nodes = f
+    #     devices_per_node = 50
 
-        setup_our_scheme(fog_nodes, devices_per_node)
+    #     setup_our_scheme(fog_nodes, devices_per_node)
 
-        start_time = time.time()
-        fog_data_store = {i: [] for i in range(fog_nodes)}
+    #     start_time = time.time()
+    #     fog_data_store = {i: [] for i in range(fog_nodes)}
 
-        threads = []
+    #     threads = []
 
-        # step 1_OUR: simulate IoT devices sending data to fog nodes
-        for fog_node_index in range(fog_nodes):
-            for device_index in range(devices_per_node):
-                sig, pu_key, device_data = simulate_iot_data(fog_node_index, device_index)
-                t = threading.Thread(target=send_data_to_fog_node, args=(fog_node_index, device_index, sig, pu_key, device_data, fog_data_store))
-                threads.append(t)
-                t.start()
+    #     # step 1_OUR: simulate IoT devices sending data to fog nodes
+    #     for fog_node_index in range(fog_nodes):
+    #         for device_index in range(devices_per_node):
+    #             sig, pu_key, device_data = simulate_iot_data(fog_node_index, device_index)
+    #             t = threading.Thread(target=send_data_to_fog_node, args=(fog_node_index, device_index, sig, pu_key, device_data, fog_data_store))
+    #             threads.append(t)
+    #             t.start()
 
-        for t in threads:
-            t.join()
+    #     for t in threads:
+    #         t.join()
 
-        # step 2: aggregate data at fog nodes
-        aggregated_data_store = {}
-        for group_index in range(fog_nodes):
-            aggregated_data_store[group_index] = aggregate_data(group_index, fog_data_store)
+    #     # step 2: aggregate data at fog nodes
+    #     aggregated_data_store = {}
+    #     for group_index in range(fog_nodes):
+    #         aggregated_data_store[group_index] = aggregate_data(group_index, fog_data_store)
         
-        # step 3: upload aggregated data to Azure Blob Storage
-        upload_threads = []
-        for group_index in range(fog_nodes):
-            aggregated_data = aggregated_data_store[group_index]
-            t = threading.Thread(target=upload_to_azure, args=(group_index, aggregated_data, devices_per_node, fog_nodes))
-            upload_threads.append(t)
-            t.start()
+    #     # step 3: upload aggregated data to Azure Blob Storage
+    #     upload_threads = []
+    #     for group_index in range(fog_nodes):
+    #         aggregated_data = aggregated_data_store[group_index]
+    #         t = threading.Thread(target=upload_to_azure, args=(group_index, aggregated_data, devices_per_node, fog_nodes))
+    #         upload_threads.append(t)
+    #         t.start()
 
-        for t in upload_threads:
-            t.join()
+    #     for t in upload_threads:
+    #         t.join()
 
-        end_time = time.time()
-        elapsed_time = end_time - start_time  # calculate elapsed time
+    #     end_time = time.time()
+    #     elapsed_time = end_time - start_time  # calculate elapsed time
 
-        time_taken_fog_increase.append((f"{f} fog no", elapsed_time))
+    #     time_taken_fog_increase.append((f"{f} fog no", elapsed_time))
     
-    print(f"Traditional scheme: {time_taken_fog_increase}")
+    # print(f"Traditional scheme: {time_taken_fog_increase}")
 
     # start_time = time.time()
     

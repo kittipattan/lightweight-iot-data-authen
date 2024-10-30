@@ -59,7 +59,7 @@ def puf_based_authen(group: List[IoTPi], leader: LeaderPi, server: LocalServer):
 
     # Mutual Authentication and Key Exchange phase
     # print(f"\nStarting Group {leader.gid} Mutual Authentication phase...")
-    start_time = timeit.default_timer()
+    # start_time = timeit.default_timer()
 
     for iot in group:
         if isinstance(iot, Leader):
@@ -189,7 +189,8 @@ def puf_based_authen(group: List[IoT], leader: Leader, server: LocalServer):
 
     # Mutual Authentication and Key Exchange phase
     # print(f"\nStarting Group {leader.gid} Mutual Authentication phase...")
-    start_time = timeit.default_timer()
+    # start_time = timeit.default_timer()
+    
     for iot in group:
         if isinstance(iot, Leader):
             continue

@@ -2,9 +2,43 @@ import secrets
 import sys
 from ecpy.keys   import ECPublicKey, ECPrivateKey
 from ecpy.curves import Curve
+from ecdsa import SigningKey, VerifyingKey, NIST256p, ECDH
 from typing import Tuple
-import blake3 as b3
+import hashlib
 
+curve = NIST256p
+
+# Schnorr NIZK Proof
+def schnorr_nizk_proof(sk, vk, message):
+    # Step 1: Generate a random number v and compute V = vG
+    v = secrets.randbelow(curve.order)  # Random scalar
+    V = curve.generator * v             # R is a point on the curve
+
+    # Step 2: Compute the challenge c = H(G || R || vk || OtherInfo)
+    hasher = hashlib.sha256(curve.generator.to_bytes() + V.to_bytes() + vk.to_string() + message)
+    c = int.from_bytes(hasher.digest())
+
+    # Step 3: Compute the response r = v - c * PrK % curve_order
+    r = v - (c * sk.privkey.secret_multiplier) % curve.order
+    
+    return V, r
+
+# Verification function
+def schnorr_nizk_verify(V, r, vk, message):
+    # Step 1: Compute the challenge again
+    hasher = hashlib.sha256(curve.generator.to_bytes() + V.to_bytes() + vk.to_string() + message)
+    c = int.from_bytes(hasher.digest())
+    
+    # Step 2: Verify R' = sG + c*vk
+    G = curve.generator
+    rG = r * G
+    c_vk = c * vk.pubkey.point
+    V_prime = rG + c_vk
+
+    return V_prime == V
+
+
+# OLD
 def generate_proof(curve: Curve, prk: ECPrivateKey, PK: ECPublicKey, id: int, gid: int, data=b"sample"):
     n = curve.order
     G = curve.generator
@@ -15,7 +49,7 @@ def generate_proof(curve: Curve, prk: ECPrivateKey, PK: ECPublicKey, id: int, gi
     M = data
     
     v = ECPrivateKey(secrets.randbits(256), curve)  # choose v randomly
-    V = v.get_public_key()                                                 # V = G x v
+    V = v.get_public_key()                          # V = G x v
 
     c = generate_challenge(G, V, PK, id, gid, M)
 
@@ -42,7 +76,7 @@ def generate_proof_fog(curve, prk, PK, data=b"sample"):
     return (PK, M, V, r)
 
 def generate_challenge(G, V, PK, id, gid, M):
-    hasher = b3.blake3((G.x).to_bytes(32)              # 256 bits
+    hasher = hashlib.sha256((G.x).to_bytes(32)              # 256 bits
             + (G.y).to_bytes(32)
             + (V.W.x).to_bytes(32)
             + (V.W.y).to_bytes(32)
@@ -55,7 +89,7 @@ def generate_challenge(G, V, PK, id, gid, M):
     return int.from_bytes(hasher.digest())
 
 def generate_challenge_fog(G, V, PK, M):
-    hasher = b3.blake3((G.x).to_bytes(32)              # 256 bits
+    hasher = hashlib.sha256((G.x).to_bytes(32)              # 256 bits
             + (G.y).to_bytes(32)
             + (V.W.x).to_bytes(32)
             + (V.W.y).to_bytes(32)

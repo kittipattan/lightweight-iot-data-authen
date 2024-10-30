@@ -4,7 +4,7 @@ from ecpy.curves import Curve
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from utils.nizkp import generate_proof, verify_proof_fog
-from archive.iot import IoT
+from iot_confer import IoT
 import secrets
 from datetime import datetime
 from utils.aes256 import AESCipher

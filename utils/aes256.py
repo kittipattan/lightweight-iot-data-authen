@@ -82,56 +82,6 @@ class AESGCMCipher:
         plaintext = self.aesgcm.decrypt(nonce, ciphertext, associated_data)  # Decrypt the ciphertext
         return plaintext
 
-
-# class AESCipher:
-#     def __init__(self, key_size=256):
-#         """
-#         Initializes the AES-GCM class.
-#         :param key_size: Size of the AES key in bits (128, 192, or 256). Default is 256 bits.
-#         """
-#         self.key_size = key_size
-#         self.key = os.urandom(key_size // 8)  # Generate a random key (key_size // 8 bytes)
-
-#     def encrypt(self, plaintext):
-#         """
-#         Encrypts the provided plaintext using AES-GCM.
-#         :param plaintext: Data to be encrypted (in bytes).
-#         :return: A tuple of (ciphertext, nonce, tag)
-#         """
-#         # Generate a unique 12-byte nonce
-#         nonce = os.urandom(12)
-
-#         # Initialize AES-GCM with the key and nonce
-#         cipher = Cipher(algorithms.AES(self.key), modes.GCM(nonce), backend=default_backend())
-#         encryptor = cipher.encryptor()
-
-#         # Encrypt the plaintext
-#         ciphertext = encryptor.update(plaintext) + encryptor.finalize()
-
-#         # Return the ciphertext, nonce, and authentication tag
-#         return ciphertext, nonce, encryptor.tag
-
-#     def decrypt(self, ciphertext, nonce, tag):
-#         """
-#         Decrypts the provided ciphertext using AES-GCM.
-#         :param ciphertext: Data to be decrypted (in bytes).
-#         :param nonce: The nonce used during encryption (must match the one used for encryption).
-#         :param tag: The authentication tag from the encryption process.
-#         :return: Decrypted plaintext.
-#         """
-#         # Initialize AES-GCM with the key, nonce, and tag
-#         cipher = Cipher(algorithms.AES(self.key), modes.GCM(nonce, tag), backend=default_backend())
-#         decryptor = cipher.decryptor()
-
-#         # Decrypt the ciphertext
-#         plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-
-#         return plaintext
-
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-import os
-
 class AESCBCCipher:
     """
     A class that provides AES-CBC encryption and decryption operations.

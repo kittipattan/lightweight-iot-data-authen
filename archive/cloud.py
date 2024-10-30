@@ -1,15 +1,13 @@
 import threading
-import json
 import time
 import secrets
-import archive.iot as iot
-import utils.utils as utils
-from utils.aes256 import AESCipher
-from base64 import b64encode, b64decode
+from utils.aes256 import AESCBCCipher
 from ecpy.keys   import ECPublicKey, ECPrivateKey
 from ecpy.curves import Curve
 from ecpy.ecdsa  import ECDSA
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
+import hmac
+import hashlib
 
 # IoT Data
 gid = []    # m groups, same as fog_node_id
@@ -78,25 +76,23 @@ def setup_our_scheme(fog_nodes, devices_per_node):
     for i in range(len(gid)):
         
         # generated Secret by Fog
-        s.append(str(secrets.randbits(128)))  # to send to IoT devices
+        s.append(secrets.token_bytes(32))     # to send to IoT devices
 
         # Fog node AES key
         fog_key = secrets.token_bytes(32)
 
         # Encrypted secret
-        secret_cipher = AESCipher(fog_key)    # key to encrypt secret
+        secret_cipher = AESCBCCipher(fog_key)    # key to encrypt secret
         ciphered_s.append(secret_cipher.encrypt(s[i])) # store in database
 
         # Encrypted secret for PUF-based authentication and key exchange
         sk_puf.append(secrets.token_bytes(32))
-        secret_cipher_puf.append(AESCipher(sk_puf[i]))
+        secret_cipher_puf.append(AESCBCCipher(sk_puf[i]))
         ciphered_s_puf.append(secret_cipher_puf[i].encrypt(s[i]))  # sent to each device in the group
 
         # Encrypted AES key
-        hashed_gid = utils.hash_sha256(str(gid[i])) # encrypt key with hash value of GID
-        key_cipher = AESCipher(hashed_gid)
-        encoded_fog_key = b64encode(fog_key).decode("utf-8")
-        ciphered_fog_key = key_cipher.encrypt(encoded_fog_key) # -> to partition
+        key_cipher = AESCBCCipher(hashlib.sha256(gid[i].to_bytes(4)))
+        ciphered_fog_key = key_cipher.encrypt(fog_key) # -> to partition
 
         # partition AES_cipher
         index_to_split = round(len(ciphered_fog_key)*0.8)
@@ -115,8 +111,13 @@ def simulate_iot_data(device_index, group_index):
     secret_puf = secret_cipher_puf[group_index].decrypt(ciphered_s_puf[group_index])
     # print(f"secret PUF;           iot {id[group_index][device_index]}, group {gid[group_index]}: {secret_puf}")
     # print(f"sk_puf group {gid[group_index]}: {sk_puf[group_index]}")
+    token = hmac.new(
+        key=secret_puf,
+        msg=(gid[group_index].to_bytes(4) + id[group_index][device_index].to_bytes(4) + data[group_index][device_index].encode()),
+        digestmod=hashlib.sha256
+    ).digest()
     
-    return iot.generate_token(str(gid[group_index]), str(id[group_index][device_index]), secret_puf, data[group_index][device_index]), data[group_index][device_index]
+    return token, data[group_index][device_index]
 
 # function to verify an IoT device
 def verify_iot_device(token, group_index, device_index, barrier):
@@ -130,17 +131,20 @@ def verify_iot_device(token, group_index, device_index, barrier):
       ciphered_fog_key += partial_ciphered_key_fog[group_index]
 
       # Encrypted AES key
-      hashed_gid = utils.hash_sha256(str(gid[group_index])) # encrypt key with hash value of GID
-      key_cipher = AESCipher(hashed_gid)
-      encoded_fog_key = key_cipher.decrypt(ciphered_fog_key) # to decrypt the ciphered secret
-      fog_key = b64decode(encoded_fog_key.encode("utf-8"))
+      key_cipher = AESCBCCipher(hashlib.sha256(gid[group_index].to_bytes(4)))
+      fog_key = key_cipher.decrypt(ciphered_fog_key) # to decrypt the ciphered secret
 
-      secret_cipher = AESCipher(fog_key)
+      secret_cipher = AESCBCCipher(fog_key)
       s = secret_cipher.decrypt(ciphered_s[group_index])
 
-      concat_data = str(gid[group_index]) + str(id[group_index][device_index]) + s + data[group_index][device_index]
+      concat_data = gid[group_index].to_bytes(4) + id[group_index][device_index].to_bytes(4) + data[group_index][device_index].encode()
+      token_fog = hmac.new(
+          key=s,
+          msg=concat_data,
+          digestmod=hashlib.sha256
+      ).digest()
 
-      if (token == utils.hash_sha256(concat_data)):
+      if (hmac.compare_digest(token, token_fog)):
           return True
       
       return False
@@ -170,18 +174,19 @@ def aggregate_data(group_index, fog_data_store):
 def upload_to_azure(fog_node_index, aggregated_data, fog_nodes, devices_per_node):
     try:
         # initialize a connection to Azure Blob Storage
-        connect_str = ""    # to add connection
-        blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-        container_name = "iiot-data-authentication-to-cloud"
-        blob_name = f"our_scheme/fog_no_{fog_nodes}/device_no_{devices_per_node}/aggregated_data_{gid[fog_node_index]}.json"
+        # connect_str = ""    # to add connection
+        # blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+        # container_name = "iiot-data-authentication-to-cloud"
+        # blob_name = f"our_scheme/fog_no_{fog_nodes}/device_no_{devices_per_node}/aggregated_data_{gid[fog_node_index]}.json"
         
-        # convert aggregated data to JSON
-        data = json.dumps(aggregated_data)
+        # # convert aggregated data to JSON
+        # data = json.dumps(aggregated_data)
         
-        # upload data
-        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
-        blob_client.upload_blob(data, overwrite=True)
-        # print(f"Uploaded aggregated data of fog node {gid[fog_node_index]} to Azure Blob Storage.")
+        # # upload data
+        # blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+        # blob_client.upload_blob(data, overwrite=True)
+        # # print(f"Uploaded aggregated data of fog node {gid[fog_node_index]} to Azure Blob Storage.")
+        pass
     
     except Exception as e:
         # print(f"Error uploading data for fog node {gid[fog_node_index]}: {e}")
@@ -278,17 +283,17 @@ def main():
 
         # step 3: upload aggregated data to Azure Blob Storage
         upload_threads = []
-        for group_index in range(fog_nodes):
-            aggregated_data = aggregated_data_store[group_index]
-            t = threading.Thread(target=upload_to_azure, args=(group_index, aggregated_data, fog_nodes, devices_per_node))
-            upload_threads.append(t)
-            t.start()
+        # for group_index in range(fog_nodes):
+        #     aggregated_data = aggregated_data_store[group_index]
+        #     t = threading.Thread(target=upload_to_azure, args=(group_index, aggregated_data, fog_nodes, devices_per_node))
+        #     upload_threads.append(t)
+        #     t.start()
 
-        for t in upload_threads:
-            t.join()
+        # for t in upload_threads:
+        #     t.join()
 
-        end_time = time.time()
-        elapsed_time = end_time - start_time  # calculate elapsed time
+        # end_time = time.time()
+        # elapsed_time = end_time - start_time  # calculate elapsed time
 
         time_taken_fog_increase.append((f"{f} fog no", elapsed_time))
     

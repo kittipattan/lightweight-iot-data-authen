@@ -1,9 +1,7 @@
 from utils.aes256 import AESGCMCipher, AESCBCCipher
-from ecdsa import SigningKey, VerifyingKey, NIST256p, ECDH
-from utils.nizkp import schnorr_nizk_proof, schnorr_nizk_verify
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
+from ecpy.curves import Curve
+from ecpy.keys import ECPublicKey, ECPrivateKey
+from utils.nizkp import generate_proof_fog, verify_proof
 from typing import List, Tuple
 from iot_rasppi import IoTPi
 from leader_rasppi import LeaderPi
@@ -20,17 +18,16 @@ import hashlib
 import time
 import struct
 from threading import Thread
-import pickle
 
 class Fog:
     def __init__(self):
-        self.curve = NIST256p
-        self.prk = SigningKey.generate(curve=self.curve, hashfunc=hashlib.sha256)
-        self.PK = self.prk.verifying_key
-        self.ecdhPrK = None
-        self.ecdhPK = None
+        # NIZKP
+        self.curve = Curve.get_curve("Curve25519")
+        self.G = self.curve.generator
+        self.n = self.curve.order
+        self.prk = ECPrivateKey(secrets.randbits(256), self.curve)  # private key PrKF
+        self.PK = self.prk.get_public_key()  # PKF
         self.ssk = None
-        self.salt = None
 
         # Local Database
         self.iotAuthDB = {}  # store gid, enc_secret, partial_ciphered_key (20%)
@@ -51,7 +48,7 @@ class Fog:
         leader_id = device_crps[0][0]
         leader_challenge = device_crps[0][1]
         leader_response = device_crps[0][2]
-        # group_key = os.urandom(32)
+        group_key = os.urandom(32)
         
         for device_crp, device in zip(device_crps, group):
             device_id = device_crp[0]
@@ -75,7 +72,7 @@ class Fog:
             # Encrypt keys for devices
             enc_keys_leader = AESGCMCipher(leader_key).encrypt(
                 n_gcm,
-                (pair_key),
+                (pair_key + group_key),
                 (
                     leader_challenge.tobytes()
                     + device_id.to_bytes(4)
@@ -87,7 +84,7 @@ class Fog:
 
             enc_keys_device = AESGCMCipher(device_key).encrypt(
                 n_gcm,
-                (pair_key),
+                (pair_key + group_key),
                 (
                     device_challenge.tobytes()
                     + leader_id.to_bytes(4)
@@ -115,100 +112,114 @@ class Fog:
                 enc_keys_device,
             )
             
-            leader.recvPairKey(leader_pkt)
-            device.recvPairKey(device_pkt)
+            leader.recvKeys(leader_pkt)
+            device.recvKeys(device_pkt)
 
     # PHASE 2: Key Exchange
     # IoT devices only
-    
-    # PHASE 3: Group Key Generation
-    # IoT devices only
 
-    # PHASE 4: Group Authentication
-    def genProof(self):
-        self.ecdhPrK = SigningKey.generate(curve=self.curve, hashfunc=hashlib.sha256)
-        self.ecdhPK = self.ecdhPrK.verifying_key
-        message = self.ecdhPK.to_string()
-        V, r = schnorr_nizk_proof(self.prk, self.PK, message)
-        self.salt = V.to_bytes()[:16]
-        
-        return (self.PK, self.ecdhPK, V, r)
+    # PHASE 3: Group Authentication
+    # NIZKP
+    def genProof(self, message=b"fog data"):
+        return generate_proof_fog(self.curve, self.prk, self.PK, message)
 
     def verifyProof(self, leader_proof):
-        leader_pk, leader_id, leader_ecdhPK, leader_V, leader_r = leader_proof
-        message = leader_id.to_bytes(4) + leader_ecdhPK.to_string()
-        
-        if not schnorr_nizk_verify(leader_V, leader_r, leader_pk, message):
-            raise Exception("Leader NIZKP Proof is invalid")
-        
-        self.deriveSSK(leader_ecdhPK, self.salt)
-        
-    def deriveSSK(self, sharing_PK, salt):
-        # x = (self.curve.mul_point(self.prk.d, sharing_PK.W)).x.to_bytes(32)
-        x = (self.ecdhPrK.privkey.secret_multiplier * sharing_PK.pubkey.point).x().to_bytes(32)
-        # self.ssk = b3.blake3(
-        #     (x + salt),
-        #     derive_key_context="LightPUF SSK Derivation 2024-09-26 21:58:05 derive SSK between Leader and Fog",
-        # ).digest()
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            info=b"LightPUF IoT 2024-09-26 01:47:29 Derive key in Group Authentication",
-            backend=default_backend(),
-        )
-        self.ssk = hkdf.derive(x)
+        return verify_proof(leader_proof, self.G)
 
-    # PHASE 5: Data Authentication and Integrity Verification
-    def genSec(self, group: List[IoTPi]):
+    # Secure Communication Establishment
+    def deriveSSK(self, sharing_PK, salt):
+        x = (self.curve.mul_point(self.prk.d, sharing_PK.W)).x.to_bytes(32)
+        self.ssk = b3.blake3(
+            (x + salt),
+            derive_key_context="LightPUF SSK Derivation 2024-09-26 21:58:05 derive SSK between Leader and Fog"
+        ).digest()
+
+    # PHASE 4: Data Authentication and Integrity Verification
+    def genSec(self, gk_pkt: Tuple[bytes, float, bytes], group: List[IoTPi]):
         if not isinstance(group[0], LeaderPi):
             raise Exception("Secret generation error")
         gid = group[0].gid
-        leader_id = group[0].id
 
         # 1. Secret Generation
-        group_secret = os.urandom(32)       # SGID
+        # Receive group key from Leader
+        enc_group_key = gk_pkt[0]
+        leader_timestamp = gk_pkt[1]
+        leader_n_gcm = gk_pkt[2]
+
+        # Validate timestamp
+        if abs(time.time() - leader_timestamp) >= 60:
+            raise Exception("Timestamp is too old or too far in the future")
+
+        # Decrypt group key
+        group_key = AESGCMCipher(self.ssk).decrypt(
+            leader_n_gcm,
+            enc_group_key,
+            (struct.pack("d", leader_timestamp) + leader_n_gcm)
+        )
+        
+        group_secret = os.urandom(32)
         # group_secret = b'\x0cg\x1dcm\x86p\xfbo\xa5-x\x9d9g\xfe,G\xd5\xbe\x85\xef\xafsY6\x9a\x7f\xfb\x91\x1f\xd2'
-        pre_key = os.urandom(32)   # k
-        # intermediary_key = b'M\x84\x179\xf8/\xb4\xb5w!\xec\xf5v\xc6\xbd\xd1\xd3\x05s\xbc\x18T\xda\xaeI\xb8\xa1H5Ir\x07'
-        database_key = hmac.new(key=hashlib.sha256(self.prk.to_string()).digest(), msg=pre_key, digestmod=hashlib.sha256).digest()
-        enc_group_secret_database = AESCBCCipher(database_key).encrypt(group_secret)
-        enc_pre_key = AESCBCCipher(hashlib.sha256(gid.to_bytes(4)).digest()).encrypt(pre_key)
+        aes_key = os.urandom(32)
+        # aes_key = b'M\x84\x179\xf8/\xb4\xb5w!\xec\xf5v\xc6\xbd\xd1\xd3\x05s\xbc\x18T\xda\xaeI\xb8\xa1H5Ir\x07'
+        enc_group_secret_database = AESCBCCipher(aes_key).encrypt(group_secret)
+        enc_group_secret_device = AESCBCCipher(group_key).encrypt(group_secret)
+        enc_aes_key = AESCBCCipher(hashlib.sha256(gid.to_bytes(4)).digest()).encrypt(aes_key)
         timestamp = time.time()
 
         # 2. AES Key Encryption and Key Splitting
         # Partition AES_cipher (8 for IoTs : 2 for storing in Fog database)
-        index_to_split = round(len(enc_pre_key) * 0.8)
-        partial_enc_pre_key = enc_pre_key[:index_to_split]
-        dxs: List[bytes] = []
+        index_to_split = round(len(enc_aes_key) * 0.8)
+        partial_enc_aes_key = enc_aes_key[:index_to_split]
+        messages: List[bytes] = []
 
         # Store in database
-        self.iotAuthDB[gid] = (enc_group_secret_database, enc_pre_key[index_to_split:])
+        self.iotAuthDB[gid] = (enc_group_secret_database, enc_aes_key[index_to_split:])
 
         for i, device in enumerate(group):
-            start = round((i * len(partial_enc_pre_key)) / len(group))
-            end = round(((i + 1) * len(partial_enc_pre_key)) / len(group))
+            start = round((i * len(partial_enc_aes_key)) / len(group))
+            end = round(((i + 1) * len(partial_enc_aes_key)) / len(group))
 
             # DX
-            dx = partial_enc_pre_key[start:end]
+            dx = partial_enc_aes_key[start:end]
 
             # Fog stores H(DX) in own database
             self.__iotPartialKeyDB[device.id] = hashlib.sha256(dx).digest()
 
-            dxs.append(
-                (device.id, dx)
+            # MAC
+            # device_mac = b3.blake3(
+            #     (device.id.to_bytes(4) + enc_group_secret_device + dx + struct.pack("d", timestamp)),
+            #     key=group_key,
+            # ).digest()
+            device_mac = hmac.new(
+                msg=(device.id.to_bytes(4) + enc_group_secret_device + dx + struct.pack("d", timestamp)),
+                key=group_key,
+                digestmod=hashlib.sha256
+            ).digest()
+            
+            # device_mac = hmac.new(
+            #     msg=(device.id.to_bytes(4) + enc_group_secret_device + dx + struct.pack("d", timestamp)),
+            #     key=group_key,
+            #     digestmod=hashlib.sha256
+            # ).digest()
+
+            messages.append(
+                (device.id, enc_group_secret_device, dx, timestamp, device_mac)
             )
 
-        n_gcm = os.urandom(12)
-        timestamp = time.time()
-        message = group_secret + pickle.dumps(dxs) # Here
-        assoc_data = (leader_id.to_bytes(4) + struct.pack("d", timestamp) + n_gcm)
-        enc_message = AESGCMCipher(self.ssk).encrypt(
-            n_gcm, message, assoc_data
-        )
+        # n_gcm = os.urandom(12)
+        # enc_messages = AESGCMCipher(self.ssk).encrypt(
+        #     n_gcm, pickle.dumps(messages), (struct.pack("d", timestamp) + n_gcm)
+        # )
 
-        # Send to Leader
-        return (timestamp, n_gcm, enc_message)
+        return messages
+
+    # def sendSecToLeader(self, group: List[IoT]):
+    #     (secret, ciphered_keys) = self.genSec(group)
+    #     ciphered_keys = list(map(lambda ck: ck.hex(), ciphered_keys))
+    #     # print(f"ciphered_keys: {ciphered_keys}")
+    #     json_cks = json.dumps(ciphered_keys)
+    #     enc_packet = AESCipher(self.ssk).encrypt(f"{secret.hex()}||||{json_cks}")
+    #     return enc_packet
 
     def recvData(self, iot_packet):
         (iot_gid, iot_id, iot_timestamp, iot_partialKey, iot_token, iot_data) = iot_packet
@@ -228,7 +239,7 @@ class Fog:
         # Temporary store IoT partial ciphered key and wait to be 100% full
         self.iotTempData[iot_id] = (iot_gid, iot_timestamp, iot_partialKey, iot_token, iot_data)
 
-    def verifyToken(self, group: List[IoTPi]):
+    def verifyToken(self, group: List[IoTPi], aggregated_data: List[str]):
         iot_gid = group[0].gid
 
         enc_aes_key: bytes = b""
@@ -244,14 +255,14 @@ class Fog:
             enc_aes_key
         )  # to decrypt the ciphered secret
         
-        aes_key = b'M\x84\x179\xf8/\xb4\xb5w!\xec\xf5v\xc6\xbd\xd1\xd3\x05s\xbc\x18T\xda\xaeI\xb8\xa1H5Ir\x07'
+        # aes_key = b'M\x84\x179\xf8/\xb4\xb5w!\xec\xf5v\xc6\xbd\xd1\xd3\x05s\xbc\x18T\xda\xaeI\xb8\xa1H5Ir\x07'
 
         # Decrypt the enc_secret in database
         group_secret = AESCBCCipher(aes_key).decrypt(self.iotAuthDB[iot_gid][0])
 
         # Token verification
         for iot in group:
-            self.verifySingleToken(iot, group_secret, self.aggregatedData)
+            self.verifySingleToken(iot, group_secret, aggregated_data)
             # del self.iotTempData[iot.id]
             
     def verifySingleToken(self, iot: IoTPi, group_secret: bytes, aggregated_data: List[str]):
@@ -271,8 +282,8 @@ class Fog:
                 f"     Data Authentication failed: IoT {iot.id} Token invalid"
             )
         try:
-            self.aggregatedData[iot.gid].append(iot.data.decode())
-            # aggregated_data.append(iot.data.decode())
+            # self.aggregatedData[iot.gid].append(iot.data.decode())
+            aggregated_data.append(iot.data.decode())
         except KeyError:
             self.aggregatedData[iot.gid] = [iot.data.decode()]
 
@@ -297,7 +308,7 @@ class Fog:
 
             # upload data
             blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
-            blob_client.upload_blob(data, overwrite=True)
+            # blob_client.upload_blob(data, overwrite=True)
             print(f"Uploaded aggregated data of fog node {gid} to Azure Blob Storage.")
 
         except Exception as e:

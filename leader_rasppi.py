@@ -1,6 +1,4 @@
-from ecpy.keys import ECPublicKey, ECPrivateKey
-from ecpy.curves import Curve
-from utils.nizkp import generate_proof, verify_proof_fog
+from utils.nizkp import schnorr_nizk_proof, schnorr_nizk_verify
 from iot_rasppi import IoTPi
 import secrets
 from utils.aes256 import AESCBCCipher, AESGCMCipher
@@ -10,60 +8,132 @@ import os
 import time
 import struct
 from typing import List, Tuple
+from ecdsa import SigningKey, VerifyingKey, NIST256p, ECDH
+import hmac
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+import hashlib
+import pickle
 
 
 class LeaderPi(IoTPi):
     def __init__(self, id, gid, seed, data, n_challenge=64):
         super().__init__(id, gid, seed, data, n_challenge)
         # NIZKP
-        self.curve = Curve.get_curve("Curve25519")  # known to Fog already
+        self.curve = NIST256p
         self.G = self.curve.generator
         self.n = self.curve.order
-        self.prk = ECPrivateKey(secrets.randbits(256), self.curve)  # private key PrKL
-        self.PK = self.prk.get_public_key()  # PK
+        self.prk = SigningKey.generate(curve=self.curve, hashfunc=hashlib.sha256)
+        self.PK = self.prk.verifying_key
+        self.ecdhPrK = None
+        self.ecdhPK = None
         self.ssk: bytes = None
         self.encSecret: bytes = None
 
-    # NIZKP
-    def genProof(self, message):
-        return generate_proof(self.curve, self.prk, self.PK, self.id, self.gid, message)
+    # PHASE 3: Group Key Generation
+    def sendGroupKey(self, group: List[IoTPi]):
+        K = os.urandom(64)
+        self.gk = K[:32]
+        self.mk = K[32:]
 
-    def verifyProof(self, fog_proof):
-        return verify_proof_fog(fog_proof, self.G)
+        for iot in group:
+            if iot.id == self.id:
+                continue
+            timestamp = time.time()
+            n_gcm = os.urandom(12)
+            assoc_data = (
+                self.id.to_bytes(4)
+                + iot.id.to_bytes(4)
+                + struct.pack("d", timestamp)
+                + n_gcm
+            )
+            encrypted_msg = AESGCMCipher(self.localDatabase[iot.id]).encrypt(
+                nonce=n_gcm, plaintext=K, associated_data=assoc_data
+            )
+            packet = (encrypted_msg, self.id, timestamp, n_gcm)
+            iot.recvGroupKey(packet)
 
-    def deriveSSK(self, sharing_PK, salt):
-        x = (self.curve.mul_point(self.prk.d, sharing_PK.W)).x.to_bytes(32)
-        self.ssk = b3.blake3(
-            (x + salt),
-            derive_key_context="LightPUF SSK Derivation 2024-09-26 21:58:05 derive SSK between Leader and Fog"
-        ).digest()
-
-    # PHASE 4: Data Authentication and Integrity Verification
-    # 1. Secret generation
-    def sendGK(self):
-        n_gcm = os.urandom(12)
-        timestamp = time.time()
-        enc_gk = AESGCMCipher(self.ssk).encrypt(
-            n_gcm, self.gk, (struct.pack("d", timestamp) + n_gcm)
+    # PHASE 4: Group Authentication
+    def genProof(self):
+        self.ecdhPrK = SigningKey.generate(curve=self.curve, hashfunc=hashlib.sha256)
+        self.ecdhPK = self.ecdhPrK.verifying_key
+        message = self.id.to_bytes(4) + self.ecdhPK.to_string()
+        V, r = schnorr_nizk_proof(
+            self.prk, self.PK, message
         )
 
-        return enc_gk, timestamp, n_gcm
+        return (self.PK, self.id, self.ecdhPK, V, r)
 
+    def verifyProof(self, fog_proof):
+        fog_pk, fog_ecdhPK, fog_V, fog_r = fog_proof
+
+        if not schnorr_nizk_verify(fog_V, fog_r, fog_pk, fog_ecdhPK.to_string()):
+            raise Exception("Fog NIZKP Proof is invalid")
+
+        salt = fog_V.to_bytes()[:16]
+        self.deriveSSK(fog_ecdhPK, salt)
+
+    def deriveSSK(self, sharing_PK, salt):
+        # x = (self.curve.mul_point(self.prk.d, sharing_PK.W)).x.to_bytes(32)
+        x = (
+            (self.ecdhPrK.privkey.secret_multiplier * sharing_PK.pubkey.point)
+            .x()
+            .to_bytes(32)
+        )
+        # self.ssk = b3.blake3(
+        #     (x + salt),
+        #     derive_key_context="LightPUF SSK Derivation 2024-09-26 21:58:05 derive SSK between Leader and Fog",
+        # ).digest()
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            info=b"LightPUF IoT 2024-09-26 01:47:29 Derive key in Group Authentication",
+            backend=default_backend(),
+        )
+        self.ssk = hkdf.derive(x)
+        # print(f"leader ssk: {self.ssk}")
+
+    # PHASE 5: Data Authentication and Integrity Verification
     # 3. Secret distribution
     def distributeSecret(
         self,
-        messsages: List[Tuple[int, bytes, bytes, float, bytes]],
+        packet: Tuple[float, bytes, bytes],
         group: List[IoTPi],
     ):
-        for msg, iot in zip(messsages, group):
+        timestamp_fog, n_gcm, enc_message = packet
+
+        # Validate timestamp
+        if abs(time.time() - timestamp_fog) >= 300:
+            raise Exception("Timestamp is too old or too far in the future")
+
+        assoc_data = self.id.to_bytes(4) + struct.pack("d", timestamp_fog) + n_gcm
+        message = AESGCMCipher(self.ssk).decrypt(
+            nonce=n_gcm, ciphertext=enc_message, associated_data=assoc_data
+        )
+        self.secret = message[:32]
+        dxs = pickle.loads(message[32:])
+
+        enc_group_secret_device = AESCBCCipher(self.gk).encrypt(self.secret)
+        for msg, iot in zip(dxs, group):
             device_id = msg[0]
-            msg_to_iot = msg[1:]
+            dx = msg[1]
             if device_id == self.id:
-                self.recvSecret(msg_to_iot)
+                self.partialKey = dx
                 continue
-            
-            iot.recvSecret(msg_to_iot)
-            
+
+            timestamp = time.time()
+            mac_data = (
+                iot.id.to_bytes(4)
+                + enc_group_secret_device
+                + dx
+                + struct.pack("d", timestamp)
+            )
+            mac = hmac.new(key=self.mk, msg=mac_data, digestmod=hashlib.sha256).digest()
+
+            iot.recvSecret((enc_group_secret_device, dx, timestamp, mac))
+
     # Our scheme
     # def recvSecFromFog(self, enc_packet):
     #     (secret, ciphered_keys) = AESCipher(self.ssk).decrypt(enc_packet).split("||||")
